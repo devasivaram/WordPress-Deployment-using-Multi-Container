@@ -25,6 +25,7 @@ First, create a project directory for your project setup called project and navi
 mkdir project && cd project
 ~~~
 
+** You can Skip to "Lets remove the old conf file and add new one" Part for skipping SSL certbot test **
 **Let's check the certbot working before adding main code to Nginx conf and yml file
 
 Make a directory and open a file for testing  nginx config
