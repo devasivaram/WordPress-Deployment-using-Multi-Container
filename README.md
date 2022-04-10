@@ -18,22 +18,20 @@ Here we will build a multi-container WordPress installation. Which includes a My
 
 ## Procedure
 
-# Need to configure Nginx web server
+# 1. To configure Nginx web server
 
 First, create a project directory for your project setup called project and navigate to it:
 ~~~sh
 mkdir project && cd project
 ~~~
 
-** You can Skip to "Lets remove the old conf file and add new one" Part for skipping SSL certbot test **
-**Let's check the certbot working before adding main code to Nginx conf and yml file
-
-Make a directory and open a file for testing  nginx config
+Make a directory and open a file for nginx config
 ~~~sh
 mkdir nginx-conf
 vim nginx-conf/nginx.conf
 ~~~
-> Add these to the file
+
+> In this file, we add a server block with directives for our server name and document root, we also add location blocks to direct the Certbot, PHP and assests.
 ~~~
 server {
         listen 80;
@@ -81,7 +79,7 @@ server {
 }
 ~~~
 
-## Add required Environmental variables 
+## 2. Add required Environmental variables 
 
 ~~~sh
 vim .env
@@ -96,44 +94,45 @@ MYSQL_PASSWORD=your_wordpress_database_password
 
 The .env file conatins sensitive information, so you will need to tell Git and Docker what files not to copy to your Git repositories and Docker images, for that we use .gitignore and .dockerignore files.
 
-Now you will need to initaite the current working directory (project) using:
+Now you will need to initaite git in the current working directory (project):
 ~~~
 git init
 
 vim .gitignore
 vim .dockerignore
 ~~~
-> Add line ".env" in both files (.gitignore & .dockerignore)
+> Add line ".env" in both files (.gitignore & .dockerignore).
 
-## Let's create yml file for testing above configuration
+## 3. Let's create yml file for testing above configuration
 
 ~~~sh
 vim docker-compose.yml
 ~~~
+
+**Here we are using mysql:8 image with conatainer name "database" and we use wordpress image 5.1.1-fpm-alpine with container name "wordpress", this image have php-fpm enabled. Also, we are using nginx:1.15.12-alpine for webserver/Nginx image with container name "webserver". We define certbot after the webserver container. All of these containers are added in same network "wpnet".**
+
 > Add these to the file
 ~~~
 version: '3'
 
 services:
-  db:
+  database:
     image: mysql:8.0
-    container_name: db
-    restart: unless-stopped
+    container_name: database
     env_file: .env
     environment:
       - MYSQL_DATABASE=wordpress
     volumes: 
-      - dbdata:/var/lib/mysql
+      - db-data:/var/lib/mysql
     command: '--default-authentication-plugin=mysql_native_password'
     networks:
-      - app-network
+      - wpnet
 
   wordpress:
     depends_on: 
-      - db
+      - database
     image: wordpress:5.1.1-fpm-alpine
     container_name: wordpress
-    restart: unless-stopped
     env_file: .env
     environment:
       - WORDPRESS_DB_HOST=db:3306
@@ -141,24 +140,24 @@ services:
       - WORDPRESS_DB_PASSWORD=$MYSQL_PASSWORD
       - WORDPRESS_DB_NAME=wordpress
     volumes:
-      - wordpress:/var/www/html
+      - wp-data:/var/www/html
     networks:
-      - app-network
+      - wpnet
 
   webserver:
     depends_on:
       - wordpress
     image: nginx:1.15.12-alpine
     container_name: webserver
-    restart: unless-stopped
     ports:
       - "80:80"
     volumes:
-      - wordpress:/var/www/html
+      - wp-data:/var/www/html
       - ./nginx-conf:/etc/nginx/conf.d
-      - certbot-etc:/etc/letsencrypt
+      - ./logs/nginx:/var/log/nginx/
+      - certbot:/etc/letsencrypt
     networks:
-      - app-network
+      - wpnet
 
   certbot:
     depends_on:
@@ -166,37 +165,57 @@ services:
     image: certbot/certbot
     container_name: certbot
     volumes:
-      - certbot-etc:/etc/letsencrypt
-      - wordpress:/var/www/html
+      - certbot:/etc/letsencrypt
+      - wp-data:/var/www/html
     command: certonly --webroot --webroot-path=/var/www/html --email sammy@example.com --agree-tos --no-eff-email --staging -d example.com -d www.example.com
 
 volumes:
-  certbot-etc:
-  wordpress:
-  dbdata:
+  certbot:
+  wp-data:
+  db-data:
 
 networks:
-  app-network:
+  wpnet:
     driver: bridge  
 ~~~
 
+We’re using an alpine image — the 1.21.6-alpine Nginx image. This service definition also volumes:
+
+ volumes: We're specifying both named volumes and bind mounts here:
+
+   * ./nginx/:/etc/nginx/conf.d: This will bind mount the Nginx configuration directory on the host to the relevant directory on the container, ensuring that any             changes we make to files on the host will be reflected in the container.
+   * ./logs/nginx:/var/log/nginx/ : This will bind mount the Nginx log directory on the host to the log directory on the container.
+   * wp-data:/var/www/html/: This will mount our WordPress application code to the /var/www/html/ directory
+   * certbot:/etc/letsencrypt/: This will mount the relevant Let’s Encrypt certificates and keys for our domain to the appropriate directory on the container.
+
+
 ## Check the above code works and generate SSL:
 ~~~sh
+docker-compose config
 docker-compose up -d
 ~~~
 
-Once that is confirmed, rewrite the docker-compose.yml and remove and replace Nginx config file
+**You can now check that your certificates have been mounted to the webserver container with docker-compose exec:**
 
-## Rewrite docker-compose.yml file to
+~~~sh
+docker-compose exec webserver ls -l /etc/letsencrypt/live/
+~~~
+>Output
 
-Replace code in cerbot with the --staging flag in the command option with the --force-renewal flag, which will tell Certbot that you want to request a new certificate with the same domains as an existing certificate.
+-rw-r--r--    1 root     root           740 Apr  8 05:52 README
+drwxr-xr-x    2 root     root            93 Apr  8 06:13 example.com
 
-Now Run this to recreate SSL without restarting webserver:
+So the request will be successful, you can edit the certbot service definition to remove the --staging flag and replcae it with --force-renewal flag, which will tell Certbot that you want to request a new certificate with the same domains as an existing certificate. Then you may run below command which will recreate the certbot container. Also include the --no-deps option to tell Compose that it can skip starting the webserver service, since it is already running:
+
 ~~~sh
 docker-compose up --force-recreate --no-deps certbot
 ~~~
 
-## Now stop the webserver for further modification in conf and yml file
+After you've installed your certificates, you can alter your Nginx settings to include SSL.
+
+## 4. Modify Nginx conf and yml file
+
+Adding an HTTP redirect to HTTPS, defining our SSL certificate and key locations, and adding security settings and headers are all part of enabling SSL in our Nginx configuration. Since you're going to recreate the webserver, stop the webserver container now.
 
 ~~~sh
 docker-compose stop webserver
@@ -290,7 +309,7 @@ server {
 
 
 
-## Create yml file for describing the service definitions for your setup
+## Modify yml file for describing the service definitions
 
 ~~~sh
 vim docker-compose.yml
@@ -301,25 +320,23 @@ vim docker-compose.yml
 version: '3'
 
 services:
-  db:
+  database:
     image: mysql:8.0
-    container_name: db
-    restart: unless-stopped
+    container_name: database
     env_file: .env
     environment:
       - MYSQL_DATABASE=wordpress
     volumes: 
-      - dbdata:/var/lib/mysql
+      - db-data:/var/lib/mysql
     command: '--default-authentication-plugin=mysql_native_password'
     networks:
-      - app-network
+      - wpnet
 
   wordpress:
     depends_on: 
-      - db
+      - database
     image: wordpress:5.1.1-fpm-alpine
     container_name: wordpress
-    restart: unless-stopped
     env_file: .env
     environment:
       - WORDPRESS_DB_HOST=db:3306
@@ -327,9 +344,9 @@ services:
       - WORDPRESS_DB_PASSWORD=$MYSQL_PASSWORD
       - WORDPRESS_DB_NAME=wordpress
     volumes:
-      - wordpress:/var/www/html
+      - wp-data:/var/www/html
     networks:
-      - app-network
+      - wpnet
 
   webserver:
     depends_on:
@@ -341,11 +358,12 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - wordpress:/var/www/html
+      - wp-data:/var/www/html
       - ./nginx-conf:/etc/nginx/conf.d
-      - certbot-etc:/etc/letsencrypt
+      - ./logs/nginx:/var/log/nginx/
+      - certbot:/etc/letsencrypt
     networks:
-      - app-network
+      - wpnet
 
   certbot:
     depends_on:
@@ -353,21 +371,21 @@ services:
     image: certbot/certbot
     container_name: certbot
     volumes:
-      - certbot-etc:/etc/letsencrypt
-      - wordpress:/var/www/html
+      - certbot:/etc/letsencrypt
+      - wp-data:/var/www/html
     command: certonly --webroot --webroot-path=/var/www/html --email sammy@example.com --agree-tos --no-eff-email --force-renewal -d example.com -d www.example.com
 
 volumes:
-  certbot-etc:
-  wordpress:
-  dbdata:
+  certbot:
+  wp-data:
+  db-data:
 
 networks:
-  app-network:
-  driver: bridge
+  wpnet:
+    driver: bridge
 ~~~
 
-## Our setup is finished and let's start the container
+## Our setup is finished and let's recreate the container
 
 ~~~sh
 docker-compose up -d --force-recreate --no-deps webserver
@@ -375,7 +393,6 @@ docker-compose up -d --force-recreate --no-deps webserver
 
 **Now, access the domain using the EC2 IP or EC2 hostname and set up the site:**
 > ![image](https://user-images.githubusercontent.com/100773863/162557184-82a618d3-422b-4122-9eff-3a60327da29b.png)
-
 
 
 
@@ -387,16 +404,5 @@ This is how we create wordpress site using docker-compose tool with Nginx and PH
 <p align="center">
 <a href="https://www.instagram.com/dev_anand__/"><img src="https://img.shields.io/badge/Instagram-E4405F?style=for-the-badge&logo=instagram&logoColor=white"/></a>
 <a href="https://www.linkedin.com/in/dev-anand-477898201/"><img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white"/></a>
-
-
-
-
-
-
-
-
-
-
-
 
 
