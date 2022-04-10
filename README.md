@@ -5,6 +5,9 @@ Installing wordpress in Nginx using Docker-compose
 
 Here we will build a multi-container WordPress installation. Which includes a MySQL database, an Nginx web server, and WordPress containers. We will also add SSL to the domain by obtaining TLS/SSL certificates with Let’s Encrypt
 
+![image](https://user-images.githubusercontent.com/100773863/162605764-a543459e-9860-40f1-92b4-35e12b10d05d.png)
+
+
 ## Prerequisites
 
  1. Need server with Ubuntu 18.04 or above.
